@@ -1,0 +1,50 @@
+version: 2
+
+project_name: Flasher
+
+builds:
+  - id: windows-amd64
+    main: ./cmd/flasher
+    binary: Flasher
+    flags:
+      - -trimpath
+    env:
+      - GOOS=windows
+      - GOARCH=amd64
+    ldflags:
+      - -s -w -X flasher/internal/version.Version={{.Version}} -X flasher/internal/version.Commit={{.Commit}} -X flasher/internal/version.BuildDate={{.Date}}
+  - id: linux-amd64
+    main: ./cmd/flasher
+    binary: Flasher
+    flags:
+      - -trimpath
+    env:
+      - GOOS=linux
+      - GOARCH=amd64
+    ldflags:
+      - -s -w -X flasher/internal/version.Version={{.Version}} -X flasher/internal/version.Commit={{.Commit}} -X flasher/internal/version.BuildDate={{.Date}}
+  - id: darwin-arm64
+    main: ./cmd/flasher
+    binary: Flasher
+    flags:
+      - -trimpath
+    env:
+      - GOOS=darwin
+      - GOARCH=arm64
+    ldflags:
+      - -s -w -X flasher/internal/version.Version={{.Version}} -X flasher/internal/version.Commit={{.Commit}} -X flasher/internal/version.BuildDate={{.Date}}
+
+archives:
+  - formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
