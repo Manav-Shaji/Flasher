@@ -11,7 +11,14 @@ Flasher is a Windows, Linux, and macOS tool for common Android ADB and Fastboot 
 
 Flasher uses the device identity reported by ADB or Fastboot; it does not limit the workflow to a built-in model list. This does not mean every ROM or image works on every device. Choose files specifically made for your exact device and intended partition. An unknown compatibility result requires extra confirmation and is not proof that a file is safe. A mismatch or malformed package is blocked.
 
-> **Warning:** Unlocking the bootloader and flashing can erase data or make a device unusable. Back up your data and follow instructions for your exact device. Never flash a file just because its filename looks right.
+## Important warnings
+
+- **Back up first.** Unlocking the bootloader or flashing may erase your data.
+- **Use files for your exact device and variant.** Similar model names do not guarantee compatibility. Verify the source and installation instructions before flashing.
+- **Check the partition.** A boot image must be intended for `boot`; a recovery image must be intended for `recovery`. Do not use **Wipe Super** unless the image and recovery instructions specifically require a compatible `super_empty.img`.
+- **Unknown compatibility is not a safety check.** Confirming an unverified warning does not make a file compatible. A wrong image can prevent the device from booting or cause permanent damage.
+- **Keep the battery charged and the connection stable.** Do not unplug, power off, or interrupt a device during an operation.
+- **Bootloader unlocking has risks.** It may wipe the device and can affect warranty or security; check your manufacturer's policy.
 
 ## Install
 
