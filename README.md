@@ -13,12 +13,17 @@ Flasher uses the device identity reported by ADB or Fastboot; it does not limit 
 
 ## Important warnings
 
-- **Back up first.** Unlocking the bootloader or flashing may erase your data.
-- **Use files for your exact device and variant.** Similar model names do not guarantee compatibility. Verify the source and installation instructions before flashing.
-- **Check the partition.** A boot image must be intended for `boot`; a recovery image must be intended for `recovery`. Do not use **Wipe Super** unless the image and recovery instructions specifically require a compatible `super_empty.img`.
-- **Unknown compatibility is not a safety check.** Confirming an unverified warning does not make a file compatible. A wrong image can prevent the device from booting or cause permanent damage.
-- **Keep the battery charged and the connection stable.** Do not unplug, power off, or interrupt a device during an operation.
-- **Bootloader unlocking has risks.** It may wipe the device and can affect warranty or security; check your manufacturer's policy.
+> **DANGER — Flashing can permanently brick your device.** A failed or incompatible operation may leave the device unable to boot and may require specialist recovery or hardware repair. You proceed at your own risk.
+
+### Cautions before flashing
+
+- **Back up important data.** Unlocking the bootloader commonly wipes user data; flashing can also erase data.
+- **Verify the exact device and variant.** Similar names or a matching codename alone do not prove compatibility. Check the ROM maintainer's instructions and trusted sources.
+- **Verify the image and partition.** Use only a boot image for `boot`, a recovery image for `recovery`, and a `super_empty.img` only when the device-specific instructions explicitly require it.
+- **Unknown compatibility is not approval.** Confirming the warning does not make an image safe. A wrong image, firmware, partition, or install method can cause a bootloop, data loss, or a hard brick.
+- **Do not interrupt an operation.** Keep the device charged and the USB connection stable. Do not unplug, power off, or close Flasher while a command is running.
+- **Understand unlocking consequences.** Bootloader unlocking may erase the device, reduce security, or affect warranty. Check your manufacturer's policy and device-specific guidance.
+- **Know your recovery path first.** Before proceeding, ensure you have the correct stock firmware/recovery instructions and understand how to recover your exact device. Do not assume reconnecting or retrying will undo a partial flash.
 
 ## Install
 

@@ -72,7 +72,7 @@ with an actual flash during this plan.
    `adb -s <serial> shell cat /proc/uptime`.
 5. Treat unavailable properties as unknown. Do not infer root absence from a
    failed `su` command, bootloader state from root, A/B support from an empty
-   slot property, or ROM compatibility from the fingerprint.
+   slot property, or ROM compatibility from the fingerprint or device name.
 6. Disconnect the device, refresh, and verify stale ADB readings clear. Reconnect
    it and verify diagnostics return for the same serial.
 7. If supported in the test environment, repeat using an authorized ADB TCP/IP
@@ -118,8 +118,9 @@ with an actual flash during this plan.
    requirements, partition requirements, and backup readiness. A
    `VERIFIED` result reflects independent evidence. An unknown or candidate
    result requires an explicit warning confirmation in the operation flow;
-   it does not prove that the package is safe or compatible. Package/device
-   conflicts and malformed inputs must still block.
+   it does not prove that the package is safe or compatible. Flasher does not
+   include a hardcoded device compatibility list. Package/device conflicts
+   and malformed inputs must still block.
 3. For a checksum-match case, use a separately verified reference checksum.
    An adjacent `.sha256` file is not independently trusted by the app and must
    remain labeled `UNVERIFIED`, even when its value matches. The CLI accepts an
@@ -134,8 +135,9 @@ with an actual flash during this plan.
    filename.
 6. Remove or withhold firmware and partition evidence. Confirm those
    requirements remain unresolved and do not become verified from a codename
-   match. The default application currently lacks an evidence source for these
-   device-specific facts, and therefore does not authorize a flash.
+   match. Confirm the UI reports compatibility as unknown or candidate and
+   makes the unverified warning clear. Do not accept the warning or execute an
+   operation as part of this validation plan.
 7. Do not execute any operation plan or flash action in this phase.
 
 ## Phase F: Safety
@@ -153,9 +155,10 @@ with an actual flash during this plan.
 4. Change or disconnect the selected device before a prepared operation. Verify
    the operation aborts when the target serial or mode no longer matches.
 5. Review the operation planner and flash preflight using test files. Verify
-   unsupported or incompatible operations remain blocked. Do not confirm or
-   execute an actual flash, wipe, sideload, reboot, or unlock as part of this
-   procedure.
+   malformed inputs and detected package/device conflicts remain blocked, and
+   unknown compatibility is clearly shown as a warning requiring explicit
+   confirmation. Do not accept that confirmation or execute an actual flash,
+   wipe, sideload, reboot, or unlock as part of this procedure.
 6. A fresh scan only confirms current device detection/state. It cannot prove
    whether the interrupted transfer completed, that every partition is
    intact, or that any operation was rolled back. Do not retry or recover
@@ -182,6 +185,8 @@ with an actual flash during this plan.
 - For each phase, record expected versus observed values, platform-tools
   versions, application build, device mode, and any discrepancy. Redact
   identifiers and firmware details before sharing logs.
-- Begin with read-only diagnostics. Do not perform an actual flash until
-  compatibility, package requirements, and the applicable device-specific
-  procedure have been independently established.
+- Begin with read-only diagnostics. This validation plan does not authorize
+  device-changing operations. Before any separate real operation, independently
+  verify the package, exact device variant, target partition, installation
+  method, and device-specific procedure. An in-app warning or confirmation is
+  not proof of compatibility.
