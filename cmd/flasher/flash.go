@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"flasher/internal/core"
@@ -15,10 +16,11 @@ import (
 )
 
 var (
-	forceFlash       bool
-	flashSHA256      string
-	dryRunFlash      bool
-	acknowledgeFlash bool
+	forceFlash                   bool
+	flashSHA256                  string
+	dryRunFlash                  bool
+	acknowledgeFlash             bool
+	allowUnverifiedCompatibility bool
 )
 
 var flashCmd = &cobra.Command{
@@ -28,8 +30,11 @@ var flashCmd = &cobra.Command{
 
 Use --dry-run to print the target, operation, checksum and compatibility
 results, and every blocker without issuing a device-changing command.
-An actual flash requires --yes for explicit risk acknowledgement. --force
-only overrides low or unknown battery readings; it cannot bypass other checks.`,
+An actual flash requires --yes for explicit risk acknowledgement. When
+compatibility cannot be verified, add --allow-unverified-compatibility to
+accept the warning; --yes is still required. Detected package/device conflicts
+still block.
+--force only overrides low or unknown battery readings.`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		setCommandOutputSink(cmd)
@@ -58,10 +63,18 @@ only overrides low or unknown battery readings; it cannot bypass other checks.`,
 		}
 		options := core.FlashOptions{
 			SkipBattery: forceFlash, RiskAcknowledged: acknowledgeFlash || dryRunFlash,
+			AllowUnverifiedCompatibility: dryRunFlash ||
+				(allowUnverifiedCompatibility && acknowledgeFlash),
 			ExpectedSHA256: flashSHA256, InputFingerprintSHA256: inputFingerprint,
 		}
 		plan := applicationContainer.Engine.FlashService.PlanFlash(ctx, deviceState, partition, absPath, options)
 		err = runFlashPlan(cmd, plan, dryRunFlash, func() error {
+			for _, warning := range plan.Warnings {
+				if strings.HasPrefix(warning, "WARNING: Device/ROM compatibility") {
+					fmt.Fprintln(cmd.ErrOrStderr(), warning)
+					applicationContainer.Engine.Emit(core.LogInfo, warning)
+				}
+			}
 			if forceFlash {
 				warning := "WARN: --force bypasses low/unknown battery checks; invalid battery readings still block. Power loss mid-flash can brick the device."
 				fmt.Fprintln(cmd.ErrOrStderr(), warning)
@@ -151,6 +164,8 @@ func init() {
 	flashCmd.Flags().BoolVar(&forceFlash, "force", false, "Bypass low/unknown battery checks (invalid readings still block)")
 	flashCmd.Flags().StringVar(&flashSHA256, "sha256", "", "Verify the image against this SHA-256 checksum")
 	flashCmd.Flags().BoolVar(&dryRunFlash, "dry-run", false, "Show the flash plan and blockers without sending a device-changing command")
-	flashCmd.Flags().BoolVar(&acknowledgeFlash, "yes", false, "Acknowledge the risk and authorize execution (ignored for device writes during --dry-run)")
+	flashCmd.Flags().BoolVar(&allowUnverifiedCompatibility, "allow-unverified-compatibility", false,
+		"Allow unknown/candidate compatibility only after independently verifying the image for this device")
+	flashCmd.Flags().BoolVar(&acknowledgeFlash, "yes", false, "Acknowledge the risk and authorize execution")
 	rootCmd.AddCommand(flashCmd)
 }

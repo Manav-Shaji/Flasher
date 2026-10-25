@@ -115,10 +115,11 @@ with an actual flash during this plan.
    codename independently.
 2. Verify the display distinguishes package presence/readability from a
    SHA-256 match, authenticity, device identity, ROM compatibility, firmware
-   requirements, partition requirements, and backup readiness. Compatibility
-   must be `VERIFIED` for a device-changing operation to pass core validation.
-   The bundled F1/F6 profile aliases currently lack independent requirements
-   evidence, so the default application is expected to block flashing.
+   requirements, partition requirements, and backup readiness. A
+   `VERIFIED` result reflects independent evidence. An unknown or candidate
+   result requires an explicit warning confirmation in the operation flow;
+   it does not prove that the package is safe or compatible. Package/device
+   conflicts and malformed inputs must still block.
 3. For a checksum-match case, use a separately verified reference checksum.
    An adjacent `.sha256` file is not independently trusted by the app and must
    remain labeled `UNVERIFIED`, even when its value matches. The CLI accepts an

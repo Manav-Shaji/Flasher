@@ -30,24 +30,26 @@ type CompatibilityEvidence struct {
 }
 
 type CompatibilityReport struct {
-	State                CompatibilityState
-	TargetDevice         string
-	TargetManufacturer   string
-	TargetModel          string
-	PackageDeviceIDs     []string
-	FirmwareRequirements []string
-	RequiredPartitions   []string
-	InstallationMethods  []string
-	Evidence             []CompatibilityEvidence
-	MissingRequirements  []string
-	Conflicts            []string
-	Reasons              []string
-	Allowed              bool
+	State                  CompatibilityState
+	TargetDevice           string
+	TargetManufacturer     string
+	TargetModel            string
+	PackageDeviceIDs       []string
+	FirmwareRequirements   []string
+	RequiredPartitions     []string
+	InstallationMethods    []string
+	Evidence               []CompatibilityEvidence
+	MissingRequirements    []string
+	Conflicts              []string
+	Reasons                []string
+	Allowed                bool
+	AcknowledgementAllowed bool
 }
 
 type CompatibilityEvidenceSet struct {
 	ProfileVerified               bool
 	ProfileSource                 string
+	TrustedDeviceIDs              []string
 	PackageTargetsVerified        bool
 	PackageTargetSource           string
 	FirmwareProfileVerified       bool
@@ -125,61 +127,15 @@ type compatibilityPackage struct {
 	targetGroups             [][]string
 }
 
-type profileEvidence struct {
-	model       string
-	identifiers []string
-	source      string
-	verified    bool
-	details     []CompatibilityEvidence
-}
-
-// The local device-name table provides aliases only; it is not authoritative
-// compatibility evidence. Profiles intentionally remain unverified until
-// independently sourced requirements are added.
-var compatibilityProfiles = map[string]profileEvidence{
-	"beryllium": {
-		model: "POCO F1", identifiers: []string{"beryllium"},
-		source: "internal/platform/device_db.go (display-name mapping only; not authoritative)", verified: false,
-		details: profileEvidenceUnknown("POCO F1"),
-	},
-	"peridot": {
-		model: "POCO F6", identifiers: []string{"peridot", "24069PC21I", "24069PC21G"},
-		source: "internal/platform/device_db.go (display-name mapping only; not authoritative)", verified: false,
-		details: profileEvidenceUnknown("POCO F6"),
-	},
-}
-
-func profileEvidenceUnknown(model string) []CompatibilityEvidence {
-	var evidence []CompatibilityEvidence
-	for _, claim := range []string{
-		"firmware requirements", "partition layout",
-		"A/B and slot configuration", "bootloader requirements", "installation methods",
-	} {
-		evidence = append(evidence, CompatibilityEvidence{
-			Claim: claim + " for " + model, Source: "no independent device-specific source is configured",
-			Status: "unknown",
-		})
-	}
-	return evidence
-}
-
 func EvaluateROMCompatibility(device platform.DeviceState, path string, method string) CompatibilityReport {
 	return EvaluateROMCompatibilityWithEvidence(device, path, method, CompatibilityEvidenceSet{})
 }
 
 func EvaluateROMCompatibilityWithEvidence(device platform.DeviceState, path, method string, available CompatibilityEvidenceSet) CompatibilityReport {
 	report := CompatibilityReport{
-		State: CompatibilityUnknown, TargetDevice: device.Codename, Reasons: []string{},
+		State: CompatibilityUnknown, TargetDevice: device.Codename,
+		TargetManufacturer: device.Manufacturer, TargetModel: device.Model, Reasons: []string{},
 		MissingRequirements: []string{}, Conflicts: []string{}, Evidence: []CompatibilityEvidence{},
-	}
-	profile, knownProfile := compatibilityProfiles[strings.ToLower(strings.TrimSpace(device.Codename))]
-	if knownProfile {
-		report.TargetManufacturer = device.Manufacturer
-		report.TargetModel = profile.model
-	}
-	if !knownProfile {
-		report.Reasons = append(report.Reasons, "device profile is unknown or lacks independent verification")
-		report.MissingRequirements = append(report.MissingRequirements, "verified device profile")
 	}
 
 	pkg, err := inspectCompatibilityPackage(path)
@@ -196,35 +152,32 @@ func EvaluateROMCompatibilityWithEvidence(device platform.DeviceState, path, met
 		report.Reasons = append(report.Reasons, parseError)
 	}
 	report.Conflicts = append(report.Conflicts, pkg.conflicts...)
-	if knownProfile {
-		sourcePresent := strings.TrimSpace(available.ProfileSource) != ""
-		if available.ProfileVerified && sourcePresent {
-			profile.verified = true
-			profile.source = available.ProfileSource
-		}
+	profileVerified := available.ProfileVerified &&
+		strings.TrimSpace(available.ProfileSource) != "" &&
+		hasIdentifier(available.TrustedDeviceIDs, device.Codename)
+	if profileVerified {
 		report.Evidence = append(report.Evidence, CompatibilityEvidence{
-			Claim: "device identifier alias for " + profile.model, Source: profile.source,
-			Status: map[bool]string{true: "independently verified", false: "candidate only"}[profile.verified],
+			Claim: "device profile", Source: available.ProfileSource, Status: "independently verified",
 		})
-		detailVerified := []bool{
-			available.FirmwareProfileVerified && sourcePresent,
-			available.PartitionProfileVerified && sourcePresent,
-			available.SlotProfileVerified && sourcePresent,
-			available.BootloaderProfileVerified && sourcePresent,
-			available.InstallationProfileVerified && sourcePresent,
-		}
-		for i, item := range profile.details {
-			if detailVerified[i] {
-				item.Source = available.ProfileSource
-				item.Status = "independently verified"
-			}
-			report.Evidence = append(report.Evidence, item)
-			if !detailVerified[i] {
-				report.MissingRequirements = append(report.MissingRequirements, item.Claim)
-			}
-		}
-		if !profile.verified {
-			report.MissingRequirements = append(report.MissingRequirements, "independently verified device profile")
+	} else {
+		report.MissingRequirements = append(report.MissingRequirements, "independently verified device profile")
+	}
+	for _, evidence := range []struct {
+		claim    string
+		verified bool
+	}{
+		{"firmware profile", available.FirmwareProfileVerified},
+		{"partition profile", available.PartitionProfileVerified},
+		{"slot profile", available.SlotProfileVerified},
+		{"bootloader profile", available.BootloaderProfileVerified},
+		{"installation profile", available.InstallationProfileVerified},
+	} {
+		if profileVerified && evidence.verified {
+			report.Evidence = append(report.Evidence, CompatibilityEvidence{
+				Claim: evidence.claim, Source: available.ProfileSource, Status: "independently verified",
+			})
+		} else {
+			report.MissingRequirements = append(report.MissingRequirements, evidence.claim)
 		}
 	}
 	packageTargetVerified := available.PackageTargetsVerified &&
@@ -238,7 +191,7 @@ func EvaluateROMCompatibilityWithEvidence(device platform.DeviceState, path, met
 			!sameIdentifiers(pkg.deviceIDs, available.TrustedPackageDeviceIDs) {
 			report.Conflicts = append(report.Conflicts, "package target metadata conflicts with independent package evidence")
 		}
-		if knownProfile && !hasIdentifierIntersection(available.TrustedPackageDeviceIDs, profile.identifiers) {
+		if profileVerified && !hasIdentifierIntersection(available.TrustedPackageDeviceIDs, available.TrustedDeviceIDs) {
 			report.Conflicts = append(report.Conflicts, "independent package target evidence does not match the selected device profile")
 		}
 	} else {
@@ -246,17 +199,13 @@ func EvaluateROMCompatibilityWithEvidence(device platform.DeviceState, path, met
 	}
 	if len(pkg.deviceIDs) == 0 {
 		report.MissingRequirements = append(report.MissingRequirements, "package-declared target device identifier")
-	} else if knownProfile && !hasIdentifierIntersection(pkg.deviceIDs, profile.identifiers) {
-		report.State = CompatibilityIncompatible
-		report.Conflicts = append(report.Conflicts, "package target identifiers do not match the selected device profile")
-	}
-	if !knownProfile && strings.TrimSpace(device.Codename) != "" &&
+	} else if strings.TrimSpace(device.Codename) != "" &&
 		len(pkg.deviceIDs) > 0 && !hasIdentifier(pkg.deviceIDs, device.Codename) {
 		report.Conflicts = append(report.Conflicts, "package target identifier does not match the observed device codename")
 	}
-	if !knownProfile && hasIdentifier(pkg.deviceIDs, device.Codename) {
+	if hasIdentifier(pkg.deviceIDs, device.Codename) {
 		report.State = CompatibilityCandidateMatch
-		report.Reasons = append(report.Reasons, "package declaration matches the observed codename, but the device profile is unverified")
+		report.Reasons = append(report.Reasons, "package declaration matches the observed codename, but compatibility is not independently verified")
 	}
 	requirementsSourcePresent := strings.TrimSpace(available.PackageRequirementsSource) != ""
 	if !available.FirmwareRequirementsComplete || !requirementsSourcePresent {
@@ -315,15 +264,10 @@ func EvaluateROMCompatibilityWithEvidence(device platform.DeviceState, path, met
 		report.State = CompatibilityIncompatible
 	} else if len(pkg.errors) > 0 {
 		report.State = CompatibilityUnknown
-	} else if report.State != CompatibilityCandidateMatch && len(pkg.deviceIDs) > 0 && knownProfile {
-		report.State = CompatibilityCandidateMatch
-	}
-	if !knownProfile && len(report.Conflicts) == 0 {
-		report.State = CompatibilityUnknown
 	}
 	if len(report.MissingRequirements) == 0 && report.State != CompatibilityIncompatible &&
 		report.State != CompatibilityUnknown &&
-		knownProfile && profile.verified && len(pkg.deviceIDs) > 0 &&
+		profileVerified && len(pkg.deviceIDs) > 0 &&
 		len(pkg.errors) == 0 && len(pkg.conflicts) == 0 && len(report.Conflicts) == 0 {
 		report.State = CompatibilityVerified
 		report.Allowed = true
@@ -332,7 +276,10 @@ func EvaluateROMCompatibilityWithEvidence(device platform.DeviceState, path, met
 	if report.State != CompatibilityIncompatible && report.State != CompatibilityUnknown {
 		report.State = CompatibilityCandidateMatch
 	}
-	report.Reasons = append(report.Reasons, "compatibility evidence is incomplete; flashing is blocked")
+	report.AcknowledgementAllowed = len(pkg.errors) == 0 && len(pkg.conflicts) == 0 &&
+		len(report.Conflicts) == 0 &&
+		(report.State == CompatibilityCandidateMatch || report.State == CompatibilityUnknown)
+	report.Reasons = append(report.Reasons, "compatibility evidence is incomplete")
 	return report
 }
 
@@ -386,7 +333,6 @@ func inspectCompatibilityZIP(reader *zip.Reader) (compatibilityPackage, error) {
 	}
 	pkg.archiveEntries = len(reader.File)
 	var total uint64
-	metadataFound := false
 	payloadFound := false
 	for _, entry := range reader.File {
 		pkg.archiveCompressedBytes = addArchiveSize(pkg.archiveCompressedBytes, entry.CompressedSize64)
@@ -422,7 +368,6 @@ func inspectCompatibilityZIP(reader *zip.Reader) (compatibilityPackage, error) {
 		if !isCompatibilityMetadata(name) {
 			continue
 		}
-		metadataFound = true
 		total += entry.UncompressedSize64
 		if total > maxCompatibilityTotalBytes {
 			return pkg, fmt.Errorf("ROM ZIP compatibility metadata exceeds total size limit")
@@ -485,9 +430,6 @@ func inspectCompatibilityZIP(reader *zip.Reader) (compatibilityPackage, error) {
 	pkg.requiredPartitions = normalizeIdentifiers(pkg.requiredPartitions)
 	pkg.partitionNames = normalizeIdentifiers(pkg.partitionNames)
 	pkg.installationMethods = normalizeIdentifiers(pkg.installationMethods)
-	if !metadataFound {
-		pkg.errors = append(pkg.errors, "ROM ZIP contains no recognized compatibility metadata")
-	}
 	for i := 0; i < len(pkg.targetGroups); i++ {
 		for j := i + 1; j < len(pkg.targetGroups); j++ {
 			if !hasIdentifierIntersection(pkg.targetGroups[i], pkg.targetGroups[j]) {

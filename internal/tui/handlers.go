@@ -1512,7 +1512,7 @@ func (m AppModel) confirmSelectedFile(action, path, selectedFingerprint string) 
 				allowCandidateCompatibility = true
 				plan := m.App.Engine.FlashService.PlanSideload(context.Background(), state, path, core.FlashOptions{
 					AllowUnknownBattery: allowUnknownBattery, AllowCandidateCompatibility: true,
-					RiskAcknowledged: true,
+					AllowUnverifiedCompatibility: true, RiskAcknowledged: true,
 				})
 				err = plan.Error()
 				if err == nil && plan.CompatibilityStatus != string(core.CompatibilityVerified) {
@@ -1522,11 +1522,28 @@ func (m AppModel) confirmSelectedFile(action, path, selectedFingerprint string) 
 					}, "\n"))
 				}
 			case "wipe_super":
-				err = m.App.Engine.FlashService.ValidateDeviceForWipeSuper(context.Background(), state, path)
+				plan := m.App.Engine.FlashService.PlanWipeSuper(context.Background(), state, path, core.FlashOptions{
+					AllowUnverifiedCompatibility: true, RiskAcknowledged: true,
+					ExpectedSHA256: expectedSHA256, InputFingerprintSHA256: selectedFingerprint,
+				})
+				err = plan.Error()
+				warning = compatibilityWarning(plan.Warnings, warning)
 			default:
-				err = m.App.Engine.FlashService.ValidateDeviceForFlashAllowUnknownBattery(context.Background(), state, path)
+				partition := "boot"
+				if action == "flash_rec" {
+					partition = "recovery"
+				}
+				plan := m.App.Engine.FlashService.PlanFlash(context.Background(), state, partition, path, core.FlashOptions{
+					AllowUnknownBattery: true, AllowUnverifiedCompatibility: true,
+					RiskAcknowledged: true, ExpectedSHA256: expectedSHA256,
+					InputFingerprintSHA256: selectedFingerprint,
+				})
+				err = plan.Error()
+				warning = compatibilityWarning(plan.Warnings, warning)
 				if errors.Is(core.CheckBattery(state), core.ErrBatteryUnknown) {
-					warning = "Warning: battery status unknown; verify charge before flashing."
+					warning = strings.TrimSpace(strings.Join([]string{
+						warning, "Warning: battery status unknown; verify charge before flashing.",
+					}, "\n"))
 				}
 			}
 		}
@@ -1581,12 +1598,12 @@ func (m AppModel) confirmSelectedFile(action, path, selectedFingerprint string) 
 						fmt.Sprintf("Preparing sideload package: %s...", filepath.Base(path)))
 					return m.App.Engine.FlashService.SideloadWithPolicy(ctx, state, path, core.FlashOptions{
 						AllowUnknownBattery: allowUnknownBattery, AllowCandidateCompatibility: allowCandidateCompatibility,
-						RiskAcknowledged: true,
+						AllowUnverifiedCompatibility: true, RiskAcknowledged: true,
 					})
 				}
 				if action == "wipe_super" {
 					return m.App.Engine.FlashService.WipeSuperWithPolicy(ctx, state, path, core.FlashOptions{
-						RiskAcknowledged: true, ExpectedSHA256: expectedSHA256,
+						AllowUnverifiedCompatibility: true, RiskAcknowledged: true, ExpectedSHA256: expectedSHA256,
 						InputFingerprintSHA256: selectedFingerprint,
 					})
 				}
@@ -1595,12 +1612,21 @@ func (m AppModel) confirmSelectedFile(action, path, selectedFingerprint string) 
 					partition = "recovery"
 				}
 				return m.App.Engine.FlashService.FlashImageWithPolicy(ctx, state, partition, path, core.FlashOptions{
-					AllowUnknownBattery: true, RiskAcknowledged: true,
+					AllowUnknownBattery: true, AllowUnverifiedCompatibility: true, RiskAcknowledged: true,
 					ExpectedSHA256: expectedSHA256, InputFingerprintSHA256: selectedFingerprint,
 				})
 			}),
 		}
 	}
+}
+
+func compatibilityWarning(warnings []string, existing string) string {
+	for _, warning := range warnings {
+		if strings.HasPrefix(warning, "WARNING: Device/ROM compatibility") {
+			return strings.TrimSpace(strings.Join([]string{existing, warning}, "\n"))
+		}
+	}
+	return existing
 }
 
 func calculateSelectedInputFingerprint(
@@ -1736,7 +1762,11 @@ func ensureSameDevice(expected, actual platform.DeviceState) error {
 func flashConfirmation(action, name, warning string) (string, string) {
 	switch action {
 	case "wipe_super":
-		return "This erases the super partition (system, vendor, product). The device will not boot until you flash a ROM again.", "WIPE"
+		message := "This erases the super partition (system, vendor, product). The device will not boot until you flash a ROM again."
+		if warning != "" {
+			message = warning + "\n\n" + message
+		}
+		return message, "WIPE"
 	case "sideload":
 		message := "Sideload: " + name + "?"
 		if warning != "" {

@@ -96,6 +96,17 @@ func (s *defaultFlashService) ValidateDeviceForWipeSuper(ctx context.Context, st
 }
 
 func (s *defaultFlashService) validateDeviceForFlash(state platform.DeviceState, imgPath string, skipBattery, allowUnknownBattery bool, method string) error {
+	return s.validateDeviceForFlashWithPolicy(state, imgPath, FlashOptions{
+		SkipBattery: skipBattery, AllowUnknownBattery: allowUnknownBattery,
+	}, method)
+}
+
+func (s *defaultFlashService) validateDeviceForFlashWithPolicy(
+	state platform.DeviceState,
+	imgPath string,
+	options FlashOptions,
+	method string,
+) error {
 	if state.Mode != platform.ModeFastboot {
 		return fmt.Errorf("%w: expected FASTBOOT mode, got %s", ErrDeviceDisconnected, state.Mode)
 	}
@@ -111,7 +122,8 @@ func (s *defaultFlashService) validateDeviceForFlash(state platform.DeviceState,
 	if errors.Is(batteryErr, ErrBatteryInvalid) {
 		return batteryErr
 	}
-	if !skipBattery && batteryErr != nil && !(allowUnknownBattery && errors.Is(batteryErr, ErrBatteryUnknown)) {
+	if !options.SkipBattery && batteryErr != nil &&
+		!(options.AllowUnknownBattery && errors.Is(batteryErr, ErrBatteryUnknown)) {
 		return batteryErr
 	}
 
@@ -127,11 +139,20 @@ func (s *defaultFlashService) validateDeviceForFlash(state platform.DeviceState,
 	if method == "fastboot-wipe-super" {
 		requiredPartition = "super"
 	}
-	if err := s.requireROMCompatibilityForPartition(state, imgPath, method, requiredPartition); err != nil {
+	if err := s.requireROMCompatibilityForPartitionWithOptions(state, imgPath, method, requiredPartition, options); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func compatibilityCanProceed(report CompatibilityReport, options FlashOptions) bool {
+	if report.Allowed && report.State == CompatibilityVerified {
+		return true
+	}
+	return options.RiskAcknowledged && options.AllowUnverifiedCompatibility &&
+		report.AcknowledgementAllowed &&
+		(report.State == CompatibilityUnknown || report.State == CompatibilityCandidateMatch)
 }
 
 func (s *defaultFlashService) ValidateDeviceForSideload(ctx context.Context, state platform.DeviceState, imgPath string) error {
@@ -166,21 +187,35 @@ func (s *defaultFlashService) ValidateDeviceForSideloadWithPolicy(ctx context.Co
 		return batteryErr
 	}
 	report := s.evaluateCompatibility(state, imgPath, "adb-sideload")
-	if report.Allowed && report.State == CompatibilityVerified {
-		return nil
-	}
-	if options.AllowCandidateCompatibility && options.RiskAcknowledged &&
-		sideloadCompatibilityCanProceed(report, state) {
+	if compatibilityCanProceed(report, options) ||
+		(options.AllowCandidateCompatibility && options.RiskAcknowledged &&
+			sideloadCompatibilityCanProceed(report, state)) {
 		return nil
 	}
 	return fmt.Errorf("%w: %s", ErrCompatibility, report.Error())
 }
 
 func (s *defaultFlashService) requireROMCompatibilityForPartition(state platform.DeviceState, path, method, partition string) error {
+	return s.requireROMCompatibilityForPartitionWithOptions(state, path, method, partition, FlashOptions{})
+}
+
+func (s *defaultFlashService) requireROMCompatibilityForPartitionWithOptions(
+	state platform.DeviceState,
+	path, method, partition string,
+	options FlashOptions,
+) error {
 	report := s.evaluateCompatibility(state, path, method)
 	if report.Allowed && report.State == CompatibilityVerified {
 		if partition != "" && !hasIdentifier(report.RequiredPartitions, partition) {
 			return fmt.Errorf("%w: requested partition %q is not in the independently verified package partition requirements",
+				ErrCompatibility, partition)
+		}
+		return nil
+	}
+	if compatibilityCanProceed(report, options) {
+		if partition != "" && len(report.RequiredPartitions) > 0 &&
+			!hasIdentifier(report.RequiredPartitions, partition) {
+			return fmt.Errorf("%w: requested partition %q conflicts with package-declared partition requirements",
 				ErrCompatibility, partition)
 		}
 		return nil
@@ -246,7 +281,7 @@ func (s *defaultFlashService) WipeSuperWithPolicy(ctx context.Context, state pla
 		return fmt.Errorf("wipe-super validation failed: %w", err)
 	}
 	defer cleanup()
-	if err := s.validateDeviceForFlash(state, snapshot, options.SkipBattery, options.AllowUnknownBattery, "fastboot-wipe-super"); err != nil {
+	if err := s.validateDeviceForFlashWithPolicy(state, snapshot, options, "fastboot-wipe-super"); err != nil {
 		return err
 	}
 	if options.ExpectedSHA256 != "" {
@@ -307,12 +342,13 @@ func validateSelectedTarget(state platform.DeviceState) error {
 }
 
 type FlashOptions struct {
-	SkipBattery                 bool
-	AllowUnknownBattery         bool
-	AllowCandidateCompatibility bool
-	RiskAcknowledged            bool
-	ExpectedSHA256              string
-	InputFingerprintSHA256      string
+	SkipBattery                  bool
+	AllowUnknownBattery          bool
+	AllowCandidateCompatibility  bool
+	AllowUnverifiedCompatibility bool
+	RiskAcknowledged             bool
+	ExpectedSHA256               string
+	InputFingerprintSHA256       string
 }
 
 type FlashPlan struct {
@@ -439,11 +475,21 @@ func (s *defaultFlashService) PlanFlash(ctx context.Context, state platform.Devi
 		}
 		report := s.evaluateCompatibility(state, path, "fastboot-flash")
 		plan.CompatibilityStatus = string(report.State)
-		if !report.Allowed || report.State != CompatibilityVerified {
+		if report.Allowed && report.State == CompatibilityVerified {
+			if !hasIdentifier(report.RequiredPartitions, partition) {
+				addBlocker(fmt.Errorf("%w: requested partition %q is not in the independently verified package partition requirements",
+					ErrCompatibility, partition))
+			}
+		} else if compatibilityCanProceed(report, options) {
+			if len(report.RequiredPartitions) > 0 && !hasIdentifier(report.RequiredPartitions, partition) {
+				addBlocker(fmt.Errorf("%w: requested partition %q conflicts with package-declared partition requirements",
+					ErrCompatibility, partition))
+			} else {
+				plan.Warnings = append(plan.Warnings,
+					"WARNING: Device/ROM compatibility is not verified. Continue only if you independently confirmed this image is intended for this device and partition.")
+			}
+		} else {
 			addBlocker(fmt.Errorf("%w: %s", ErrCompatibility, report.Error()))
-		} else if !hasIdentifier(report.RequiredPartitions, partition) {
-			addBlocker(fmt.Errorf("%w: requested partition %q is not in the independently verified package partition requirements",
-				ErrCompatibility, partition))
 		}
 	}
 
@@ -487,7 +533,7 @@ func (s *defaultFlashService) planImageOperation(
 		addBlocker(ErrRiskAcknowledgement)
 	}
 	if requiredPartition == "super" {
-		addBlocker(s.validateDeviceForFlash(state, path, options.SkipBattery, options.AllowUnknownBattery, method))
+		addBlocker(s.validateDeviceForFlashWithPolicy(state, path, options, method))
 	} else {
 		addBlocker(s.ValidateDeviceForSideloadWithPolicy(ctx, state, path, options))
 		if options.AllowUnknownBattery && errors.Is(CheckBattery(state), ErrBatteryUnknown) {
@@ -533,15 +579,18 @@ func (s *defaultFlashService) planImageOperation(
 		}
 		report := s.evaluateCompatibility(state, path, method)
 		plan.CompatibilityStatus = string(report.State)
-		if options.AllowCandidateCompatibility && options.RiskAcknowledged &&
-			sideloadCompatibilityCanProceed(report, state) {
+		if report.Allowed && report.State == CompatibilityVerified {
+			if requiredPartition != "" && !hasIdentifier(report.RequiredPartitions, requiredPartition) {
+				addBlocker(fmt.Errorf("%w: requested partition %q is not in the independently verified package partition requirements",
+					ErrCompatibility, requiredPartition))
+			}
+		} else if compatibilityCanProceed(report, options) ||
+			(options.AllowCandidateCompatibility && options.RiskAcknowledged &&
+				sideloadCompatibilityCanProceed(report, state)) {
 			plan.Warnings = append(plan.Warnings,
-				"ROM compatibility is not fully verified. Confirm that this ZIP is intended for the selected device before continuing.")
+				"WARNING: Device/ROM compatibility is not verified. Continue only if you independently confirmed this ZIP is intended for this device.")
 		} else if !report.Allowed || report.State != CompatibilityVerified {
 			addBlocker(fmt.Errorf("%w: %s", ErrCompatibility, report.Error()))
-		} else if requiredPartition != "" && !hasIdentifier(report.RequiredPartitions, requiredPartition) {
-			addBlocker(fmt.Errorf("%w: requested partition %q is not in the independently verified package partition requirements",
-				ErrCompatibility, requiredPartition))
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -562,7 +611,8 @@ func sideloadCompatibilityCanProceed(report CompatibilityReport, device platform
 		!hasIdentifier(report.PackageDeviceIDs, device.Codename) {
 		return false
 	}
-	return report.State == CompatibilityCandidateMatch || report.State == CompatibilityUnknown
+	return report.AcknowledgementAllowed &&
+		(report.State == CompatibilityCandidateMatch || report.State == CompatibilityUnknown)
 }
 
 func (s *defaultFlashService) evaluateCompatibility(state platform.DeviceState, path, method string) CompatibilityReport {
